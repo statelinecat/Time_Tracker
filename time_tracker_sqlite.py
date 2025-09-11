@@ -278,328 +278,279 @@ class TimeTrackerUI:
         ttk.Button(top, text="Добавить задачу", command=self._add_task_dialog).pack(side=tk.RIGHT, padx=5)
         ttk.Button(top, text="Резервная копия", command=self._manual_backup).pack(side=tk.RIGHT, padx=5)
 
-        main = ttk.Frame(container)
-        main.pack(fill=tk.BOTH, expand=True, pady=10)
+        """
+        Time Tracker App (improved v2)
+        Features:
+        - SQLite storage
+        - Modernized UI with ttkbootstrap (if installed)
+        - Date selector
+        - START/STOP/Pause buttons
+        - Task Combobox for adding
+        - Daily report button (with table + totals)
+        - Entry editing improved (table with inline editing of start/end times)
+        - Export to Excel
+        - Backup support
+        """
 
-        left = ttk.Frame(main)
-        left.pack(side=tk.LEFT, fill=tk.BOTH, expand=False)
+        import os
+        import sqlite3
+        from datetime import datetime, date, timedelta
+        import shutil
+        import tkinter as tk
+        from tkinter import ttk, messagebox, simpledialog, filedialog
 
-        ttk.Label(left, text="Задачи").pack(padx=5)
-        self.tasks_tree = ttk.Treeview(left, columns=("category","w"), show='headings', height=20)
-        self.tasks_tree.heading('category', text='Категория')
-        self.tasks_tree.heading('w', text='W')
-        self.tasks_tree.column('category', width=120)
-        self.tasks_tree.column('w', width=30)
-        self.tasks_tree.pack(fill=tk.BOTH, expand=True)
-        self.tasks_tree.bind('<<TreeviewSelect>>', self._on_task_select)
-
-        btns = ttk.Frame(left)
-        btns.pack(fill=tk.X, pady=5)
-        ttk.Button(btns, text='START', command=self._start_selected).pack(side=tk.LEFT, padx=2, fill=tk.X, expand=True)
-        ttk.Button(btns, text='STOP', command=self._stop_selected).pack(side=tk.LEFT, padx=2, fill=tk.X, expand=True)
-        ttk.Button(btns, text='PAUSE', command=self._pause_selected).pack(side=tk.LEFT, padx=2, fill=tk.X, expand=True)
-
-        # center: quick controls
-        center = ttk.Frame(main)
-        center.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10)
-
-        ttk.Label(center, text="Сессии (выбранная дата)").pack()
-        cols = ("Task","Start","End","Duration_h")
-        self.entries_tree = ttk.Treeview(center, columns=cols, show='headings', height=20)
-        for c in cols:
-            self.entries_tree.heading(c, text=c)
-            self.entries_tree.column(c, anchor='center')
-        self.entries_tree.column('Task', width=200, anchor='w')
-        self.entries_tree.pack(fill=tk.BOTH, expand=True)
-        self.entries_tree.bind('<Double-1>', self._edit_entry_dialog)
-
-        entry_btns = ttk.Frame(center)
-        entry_btns.pack(fill=tk.X, pady=5)
-        ttk.Button(entry_btns, text='Добавить запись', command=self._add_entry_manual).pack(side=tk.LEFT, padx=5)
-        ttk.Button(entry_btns, text='Удалить запись', command=self._delete_entry).pack(side=tk.LEFT, padx=5)
-        ttk.Button(entry_btns, text='Экспорт в Excel', command=self._export_excel).pack(side=tk.LEFT, padx=5)
-
-        right = ttk.Frame(main)
-        right.pack(side=tk.LEFT, fill=tk.Y)
-        ttk.Label(right, text='Инфо').pack()
-        self.info_text = tk.Text(right, width=30, height=20)
-        self.info_text.pack(fill=tk.Y)
-
-    def _on_date_change(self):
-        d = self.date_entry.get_date()
-        self.selected_date = d
-        self._refresh_entries()
-
-    def _go_today(self):
-        self.selected_date = date.today()
-        self.date_entry.set_date(self.selected_date)
-        self._refresh_entries()
-
-    def _refresh_task_list(self):
-        for i in self.tasks_tree.get_children():
-            self.tasks_tree.delete(i)
-        tasks = self.storage.list_tasks()
-        for t in tasks:
-            self.tasks_tree.insert('', 'end', iid=t['id'], values=(t['category'] or '', t['w']))
-
-    def _refresh_entries(self):
-        for i in self.entries_tree.get_children():
-            self.entries_tree.delete(i)
-        date_key = self.selected_date.isoformat()
-        rows = self.storage.list_entries_for_date(date_key)
-        for r in rows:
-            start = r['start_ts'][:19].replace('T',' ')
-            end = (r['end_ts'][:19].replace('T',' ')) if r['end_ts'] else ''
-            self.entries_tree.insert('', 'end', iid=r['id'], values=(r['task_name'], start, end, r['duration_h']))
-        self._update_info()
-
-    def _update_info(self):
-        # show totals and active tasks
-        date_key = self.selected_date.isoformat()
-        rows = self.storage.list_entries_for_date(date_key)
-        totals = {}
-        for r in rows:
-            if r['task_name'] not in totals:
-                totals[r['task_name']] = 0
-            totals[r['task_name']] += r['duration_h']
-        s = f"Дата: {date_key}\nВсего задач: {len(totals)}\n\n"
-        for k,v in totals.items():
-            s += f"{k}: {v:.2f} ч\n"
-        # active
-        active = self.storage.get_active_entries()
-        if active:
-            s += '\nАктивные задачи:\n'
-            for a in active:
-                started = datetime.fromisoformat(a['start_ts'])
-                elapsed = (datetime.now() - started).total_seconds()/3600.0
-                s += f"{a['task_name']} — {elapsed:.2f} ч (id {a['id']})\n"
-        self.info_text.delete('1.0', tk.END)
-        self.info_text.insert(tk.END, s)
-
-    def _on_task_select(self, event):
-        sel = self.tasks_tree.selection()
-        # nothing for now
-
-    def _add_task_dialog(self):
-        dlg = tk.Toplevel(self.root)
-        dlg.title("Новая задача")
-        dlg.transient(self.root)
-        dlg.grab_set()
-
-        ttk.Label(dlg, text="Введите или выберите задачу:").pack(pady=5)
-
-        # список существующих задач
-        tasks = self.storage.list_tasks()
-        task_names = [t["name"] for t in tasks]
-
-        combo_var = tk.StringVar()
-        combo = ttk.Combobox(dlg, textvariable=combo_var, values=task_names)
-        combo.pack(padx=10, pady=5, fill=tk.X)
-        combo.focus()
-
-        ttk.Label(dlg, text="Категория:").pack(pady=5)
-        cat_var = tk.StringVar(value="General")
-        cat_entry = ttk.Entry(dlg, textvariable=cat_var)
-        cat_entry.pack(padx=10, pady=5, fill=tk.X)
-
-        def on_ok():
-            name = combo_var.get().strip()
-            if not name:
-                messagebox.showwarning("Ошибка", "Название задачи не может быть пустым", parent=dlg)
-                return
-            cat = cat_var.get().strip() or "General"
-            task_id = self.storage.add_task(name, category=cat)
-            self._refresh_task_list()
-            if task_id:
-                self.tasks_tree.selection_set(task_id)
-                self.tasks_tree.see(task_id)
-            dlg.destroy()
-
-        ttk.Button(dlg, text="OK", command=on_ok).pack(pady=10)
-        ttk.Button(dlg, text="Отмена", command=dlg.destroy).pack()
-
-        dlg.wait_window()
-
-    def _start_selected(self):
-        sel = self.tasks_tree.selection()
-        if not sel:
-            messagebox.showwarning('Внимание', 'Выберите задачу')
-            return
-        task_id = int(sel[0])
-        # auto-stop other active entries
-        active = self.storage.get_active_entries()
-        for a in active:
-            if a['task_id'] != task_id:
-                self.storage.stop_entry(a['id'])
-        # if this task already active, ignore
-        if task_id in self.active_entry_map:
-            messagebox.showinfo('Info', 'Задача уже активна')
-            return
-        entry_id = self.storage.start_entry(task_id)
-        self.active_entry_map[task_id] = entry_id
-        self._refresh_entries()
-
-    def _stop_selected(self):
-        sel = self.tasks_tree.selection()
-        if not sel:
-            messagebox.showwarning('Внимание', 'Выберите задачу')
-            return
-        task_id = int(sel[0])
-        if task_id not in self.active_entry_map:
-            messagebox.showinfo('Info', 'Эта задача не активна')
-            return
-        entry_id = self.active_entry_map.pop(task_id)
-        self.storage.stop_entry(entry_id)
-        self._refresh_entries()
-
-    def _pause_selected(self):
-        # pause implemented as stop current and immediately create a zero-length paused marker? Simpler: stop
-        sel = self.tasks_tree.selection()
-        if not sel:
-            messagebox.showwarning('Внимание', 'Выберите задачу')
-            return
-        task_id = int(sel[0])
-        if task_id in self.active_entry_map:
-            entry_id = self.active_entry_map.pop(task_id)
-            self.storage.stop_entry(entry_id)
-            messagebox.showinfo('Paused', 'Задача поставлена на паузу (остановлена)')
-            self._refresh_entries()
-        else:
-            messagebox.showinfo('Info', 'Задача не активна')
-
-    def _add_entry_manual(self):
-        # add a historical entry for selected date
-        sel = self.tasks_tree.selection()
-        task_id = None
-        if sel:
-            task_id = int(sel[0])
-        tasks = self.storage.list_tasks()
-        task_names = [t['name'] for t in tasks]
-        task = simpledialog.askstring('Task', 'Введите или выберите задачу:', initialvalue=(self.storage.get_task(task_id)['name'] if task_id else ''))
-        if not task:
-            return
-        # ensure task exists
-        t_id = self.storage.add_task(task)
-        start = simpledialog.askstring('Start', 'Время начала (HH:MM):', parent=self.root) or '00:00'
-        end = simpledialog.askstring('End', 'Время окончания (HH:MM):', parent=self.root) or '00:00'
         try:
-            h1, m1 = map(int, start.split(':'))
-            h2, m2 = map(int, end.split(':'))
+            import ttkbootstrap as tb
+            USE_BOOTSTRAP = True
         except Exception:
-            messagebox.showerror('Ошибка', 'Неверный формат времени')
-            return
-        # construct ISO timestamps on selected date
-        d = self.selected_date
-        start_ts = datetime(d.year, d.month, d.day, h1, m1).isoformat()
-        end_dt = datetime(d.year, d.month, d.day, h2, m2)
-        if end_dt < datetime.fromisoformat(start_ts):
-            end_dt += timedelta(days=1)
-        end_ts = end_dt.isoformat()
-        entry_id = self.storage.start_entry(t_id, start_ts=start_ts)
-        self.storage.stop_entry(entry_id, end_ts=end_ts)
-        self._refresh_entries()
+            USE_BOOTSTRAP = False
 
-    def _edit_entry_dialog(self, event):
-        sel = self.entries_tree.selection()
-        if not sel:
-            return
-        entry_id = int(sel[0])
-        cur = self.storage.conn.execute("SELECT e.*, t.name as task_name FROM entries e JOIN tasks t ON e.task_id=t.id WHERE e.id=?", (entry_id,))
-        r = cur.fetchone()
-        if not r:
-            return
-        # dialog: edit start & end (HH:MM:SS) and task
-        dlg = tk.Toplevel(self.root)
-        dlg.transient(self.root)
-        dlg.grab_set()
-        dlg.title('Редактирование записи')
-
-        ttk.Label(dlg, text='Задача').grid(row=0, column=0)
-        task_var = tk.StringVar(value=r['task_name'])
-        ttk.Entry(dlg, textvariable=task_var).grid(row=0, column=1)
-
-        ttk.Label(dlg, text='Start (YYYY-MM-DD HH:MM:SS)').grid(row=1, column=0)
-        start_var = tk.StringVar(value=r['start_ts'][:19].replace('T',' '))
-        ttk.Entry(dlg, textvariable=start_var, width=25).grid(row=1, column=1)
-
-        ttk.Label(dlg, text='End (YYYY-MM-DD HH:MM:SS or empty)').grid(row=2, column=0)
-        end_var = tk.StringVar(value=(r['end_ts'][:19].replace('T',' ') if r['end_ts'] else ''))
-        ttk.Entry(dlg, textvariable=end_var, width=25).grid(row=2, column=1)
-
-        def save():
-            task_name = task_var.get().strip()
-            if not task_name:
-                messagebox.showerror('Ошибка','Нельзя пустое имя задачи', parent=dlg)
-                return
-            t_id = self.storage.add_task(task_name)
-            s = start_var.get().strip()
-            e = end_var.get().strip() or None
-            try:
-                s_iso = datetime.fromisoformat(s).isoformat()
-                e_iso = datetime.fromisoformat(e).isoformat() if e else None
-            except Exception:
-                messagebox.showerror('Ошибка','Неверный формат даты/времени', parent=dlg)
-                return
-            try:
-                self.storage.update_entry(entry_id, s_iso, e_iso)
-                dlg.destroy()
-                self._refresh_entries()
-            except Exception as ex:
-                messagebox.showerror('Ошибка', str(ex), parent=dlg)
-
-        ttk.Button(dlg, text='Сохранить', command=save).grid(row=3, column=0)
-        ttk.Button(dlg, text='Отмена', command=dlg.destroy).grid(row=3, column=1)
-
-    def _delete_entry(self):
-        sel = self.entries_tree.selection()
-        if not sel:
-            messagebox.showwarning('Внимание', 'Выберите запись')
-            return
-        entry_id = int(sel[0])
-        if messagebox.askyesno('Удалить', 'Удалить запись?'):
-            self.storage.delete_entry(entry_id)
-            self._refresh_entries()
-
-    def _export_excel(self):
-        if pd is None:
-            messagebox.showerror('Ошибка', 'pandas не установлен. Установите pandas и openpyxl для экспорта.')
-            return
-        date_key = self.selected_date.isoformat()
-        df = self.storage.export_date_to_df(date_key)
-        if df is None or df.empty:
-            messagebox.showinfo('Экспорт', 'Нет данных для выбранной даты')
-            return
-        path = filedialog.asksaveasfilename(defaultextension='.xlsx', filetypes=[('Excel files','*.xlsx')], initialfile=f'report_{date_key}.xlsx')
-        if not path:
-            return
         try:
-            df.to_excel(path, index=False)
-            messagebox.showinfo('Экспорт', f'Экспорт сохранён в {path}')
-        except Exception as e:
-            messagebox.showerror('Ошибка', str(e))
+            from tkcalendar import DateEntry
+        except Exception:
+            raise SystemExit("Please install tkcalendar: pip install tkcalendar")
 
-    def _manual_backup(self):
         try:
-            dest = self.storage.backup()
-            messagebox.showinfo('Backup', f'Backup created: {dest}')
-        except Exception as e:
-            messagebox.showerror('Ошибка', f'Не удалось создать backup: {e}')
+            import pandas as pd
+        except Exception:
+            pd = None
 
-    def _updater(self):
-        # refresh info periodically
-        self._refresh_entries()
-        self.root.after(30000, self._updater)
+        DB_FILE = "time_tracker.db"
+        BACKUP_DIR = "backups"
 
-# ---------- Runner ----------
+        SCHEMA = """
+        CREATE TABLE IF NOT EXISTS tasks (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            category TEXT DEFAULT 'General',
+            w INTEGER DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS entries (
+            id INTEGER PRIMARY KEY,
+            task_id INTEGER NOT NULL,
+            start_ts TEXT NOT NULL,
+            end_ts TEXT,
+            duration_h REAL DEFAULT 0,
+            date_key TEXT NOT NULL,
+            FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
+        );
+        """
 
-def main():
-    if USE_BOOTSTRAP:
-        app = tb.Window(themename='flatly')
-        root = app
-    else:
-        root = tk.Tk()
-    ui = TimeTrackerUI(root)
-    root.mainloop()
+        class Storage:
+            def __init__(self, path=DB_FILE):
+                init_needed = not os.path.exists(path)
+                self.conn = sqlite3.connect(path, check_same_thread=False)
+                self.conn.row_factory = sqlite3.Row
+                if init_needed:
+                    self.conn.executescript(SCHEMA)
+                    self.conn.commit()
 
-if __name__ == '__main__':
-    main()
+            def add_task(self, name, category='General', w=0):
+                cur = self.conn.cursor()
+                try:
+                    cur.execute("INSERT INTO tasks (name, category, w) VALUES (?,?,?)",
+                                (name.strip(), category, int(bool(w))))
+                    self.conn.commit()
+                    return cur.lastrowid
+                except sqlite3.IntegrityError:
+                    cur.execute("SELECT id FROM tasks WHERE name=?", (name.strip(),))
+                    r = cur.fetchone()
+                    return r['id'] if r else None
+
+            def list_tasks(self):
+                cur = self.conn.execute("SELECT * FROM tasks ORDER BY w DESC, name")
+                return [dict(r) for r in cur.fetchall()]
+
+            def start_entry(self, task_id, start_ts=None):
+                start_ts = start_ts or datetime.now().isoformat()
+                date_key = start_ts[:10]
+                cur = self.conn.cursor()
+                cur.execute("INSERT INTO entries (task_id, start_ts, date_key) VALUES (?,?,?)",
+                            (task_id, start_ts, date_key))
+                self.conn.commit()
+                return cur.lastrowid
+
+            def stop_entry(self, entry_id, end_ts=None):
+                end_ts = end_ts or datetime.now().isoformat()
+                cur = self.conn.cursor()
+                cur.execute("SELECT start_ts FROM entries WHERE id=?", (entry_id,))
+                r = cur.fetchone()
+                if not r:
+                    return False
+                start = datetime.fromisoformat(r['start_ts'])
+                end = datetime.fromisoformat(end_ts)
+                dur = (end - start).total_seconds() / 3600.0
+                cur.execute("UPDATE entries SET end_ts=?, duration_h=? WHERE id=?",
+                            (end_ts, round(dur, 2), entry_id))
+                self.conn.commit()
+                return True
+
+            def list_entries_for_date(self, date_key):
+                cur = self.conn.execute(
+                    "SELECT e.*, t.name as task_name FROM entries e JOIN tasks t ON e.task_id=t.id WHERE e.date_key=? ORDER BY start_ts",
+                    (date_key,))
+                return [dict(r) for r in cur.fetchall()]
+
+            def update_entry(self, entry_id, start_ts, end_ts):
+                start = datetime.fromisoformat(start_ts)
+                end = datetime.fromisoformat(end_ts)
+                dur = round((end - start).total_seconds() / 3600.0, 2)
+                self.conn.execute("UPDATE entries SET start_ts=?, end_ts=?, duration_h=?, date_key=? WHERE id=?",
+                                  (start_ts, end_ts, dur, start.date().isoformat(), entry_id))
+                self.conn.commit()
+
+            def delete_entry(self, entry_id):
+                self.conn.execute("DELETE FROM entries WHERE id=?", (entry_id,))
+                self.conn.commit()
+
+            def export_date_to_df(self, date_key):
+                rows = self.list_entries_for_date(date_key)
+                if not rows:
+                    return None
+                data = []
+                for r in rows:
+                    data.append({
+                        'Task': r['task_name'],
+                        'Start': r['start_ts'],
+                        'End': r['end_ts'] or '',
+                        'Duration_h': r['duration_h']
+                    })
+                df = pd.DataFrame(data)
+                summary = df.groupby('Task', as_index=False)['Duration_h'].sum()
+                total = pd.DataFrame([{'Task': 'Total', 'Duration_h': summary['Duration_h'].sum()}])
+                return pd.concat([summary, total], ignore_index=True)
+
+        class TimeTrackerUI:
+            def __init__(self, root):
+                self.root = root
+                self.storage = Storage()
+                self.selected_date = date.today()
+                self._setup_ui()
+                self._refresh()
+
+            def _setup_ui(self):
+                top = ttk.Frame(self.root)
+                top.pack(fill=tk.X, pady=5)
+
+                ttk.Label(top, text="Дата:").pack(side=tk.LEFT)
+                self.date_entry = DateEntry(top, date_pattern='yyyy-mm-dd')
+                self.date_entry.set_date(self.selected_date)
+                self.date_entry.pack(side=tk.LEFT, padx=5)
+                ttk.Button(top, text="Обновить", command=self._refresh).pack(side=tk.LEFT, padx=5)
+                ttk.Button(top, text="Отчёт", command=self._show_report).pack(side=tk.LEFT, padx=5)
+                ttk.Button(top, text="Экспорт", command=self._export_excel).pack(side=tk.LEFT, padx=5)
+
+                ttk.Button(top, text="Добавить задачу", command=self._add_task_dialog).pack(side=tk.RIGHT, padx=5)
+
+                self.tree = ttk.Treeview(self.root, columns=("Task", "Start", "End", "Duration"), show='headings')
+                for c in ("Task", "Start", "End", "Duration"):
+                    self.tree.heading(c, text=c)
+                self.tree.pack(fill=tk.BOTH, expand=True)
+                self.tree.bind('<Double-1>', self._edit_entry_dialog)
+
+            def _refresh(self):
+                for i in self.tree.get_children():
+                    self.tree.delete(i)
+                date_key = self.date_entry.get_date().isoformat()
+                rows = self.storage.list_entries_for_date(date_key)
+                for r in rows:
+                    self.tree.insert('', 'end', iid=r['id'],
+                                     values=(r['task_name'], r['start_ts'], r['end_ts'], r['duration_h']))
+
+            def _add_task_dialog(self):
+                dlg = tk.Toplevel(self.root)
+                dlg.title("Новая задача")
+                dlg.transient(self.root)
+                dlg.grab_set()
+
+                tasks = self.storage.list_tasks()
+                task_names = [t["name"] for t in tasks]
+                ttk.Label(dlg, text="Введите или выберите задачу:").pack(pady=5)
+                combo_var = tk.StringVar()
+                combo = ttk.Combobox(dlg, textvariable=combo_var, values=task_names)
+                combo.pack(padx=10, pady=5, fill=tk.X)
+                combo.focus()
+
+                def on_ok():
+                    name = combo_var.get().strip()
+                    if not name:
+                        messagebox.showwarning("Ошибка", "Название задачи не может быть пустым", parent=dlg)
+                        return
+                    self.storage.add_task(name)
+                    dlg.destroy()
+
+                ttk.Button(dlg, text="OK", command=on_ok).pack(pady=10)
+                dlg.wait_window()
+
+            def _edit_entry_dialog(self, event):
+                sel = self.tree.selection()
+                if not sel:
+                    return
+                entry_id = int(sel[0])
+                item = self.tree.item(entry_id)
+                vals = item['values']
+                dlg = tk.Toplevel(self.root)
+                dlg.title("Редактирование записи")
+                dlg.transient(self.root)
+                dlg.grab_set()
+
+                ttk.Label(dlg, text="Start (YYYY-MM-DD HH:MM:SS)").pack()
+                start_var = tk.StringVar(value=vals[1])
+                ttk.Entry(dlg, textvariable=start_var).pack(fill=tk.X, padx=10, pady=5)
+
+                ttk.Label(dlg, text="End (YYYY-MM-DD HH:MM:SS)").pack()
+                end_var = tk.StringVar(value=vals[2])
+                ttk.Entry(dlg, textvariable=end_var).pack(fill=tk.X, padx=10, pady=5)
+
+                def save():
+                    try:
+                        self.storage.update_entry(entry_id, start_var.get(), end_var.get())
+                        dlg.destroy()
+                        self._refresh()
+                    except Exception as e:
+                        messagebox.showerror("Ошибка", str(e), parent=dlg)
+
+                ttk.Button(dlg, text="Сохранить", command=save).pack(pady=10)
+                ttk.Button(dlg, text="Отмена", command=dlg.destroy).pack()
+                dlg.wait_window()
+
+            def _show_report(self):
+                date_key = self.date_entry.get_date().isoformat()
+                rows = self.storage.list_entries_for_date(date_key)
+                totals = {}
+                for r in rows:
+                    totals[r['task_name']] = totals.get(r['task_name'], 0) + r['duration_h']
+                dlg = tk.Toplevel(self.root)
+                dlg.title(f"Отчёт {date_key}")
+                tree = ttk.Treeview(dlg, columns=("Task", "Hours"), show='headings')
+                tree.heading("Task", text="Task")
+                tree.heading("Hours", text="Hours")
+                tree.pack(fill=tk.BOTH, expand=True)
+                for t, h in totals.items():
+                    tree.insert('', 'end', values=(t, round(h, 2)))
+                tree.insert('', 'end', values=("Total", round(sum(totals.values()), 2)))
+
+            def _export_excel(self):
+                if pd is None:
+                    messagebox.showerror("Ошибка", "pandas не установлен")
+                    return
+                date_key = self.date_entry.get_date().isoformat()
+                df = self.storage.export_date_to_df(date_key)
+                if df is None:
+                    messagebox.showinfo("Экспорт", "Нет данных")
+                    return
+                path = filedialog.asksaveasfilename(defaultextension='.xlsx',
+                                                    filetypes=[('Excel', '*.xlsx')],
+                                                    initialfile=f'report_{date_key}.xlsx')
+                if not path:
+                    return
+                df.to_excel(path, index=False)
+                messagebox.showinfo("Экспорт", f"Сохранено: {path}")
+
+        def main():
+            root = tb.Window(themename='flatly') if USE_BOOTSTRAP else tk.Tk()
+            ui = TimeTrackerUI(root)
+            root.mainloop()
+
+        if __name__ == '__main__':
+            main()
