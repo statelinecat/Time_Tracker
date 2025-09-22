@@ -9,7 +9,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from tkcalendar import DateEntry  # Добавляем импорт календаря
 
-DB_FILE = "time_tracker.db"
+DB_FILE = "../time_tracker.db"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -80,11 +80,9 @@ class Storage:
         return [dict(r) for r in cur.fetchall()]
 
     def start_entry(self, task_id, date_key=None):
+        """Запустить задачу (не останавливая другие)"""
         start_ts = datetime.now().isoformat()
         date_key = date_key or start_ts[:10]
-        # Останавливаем все активные задачи
-        self.conn.execute("UPDATE entries SET active=0, end_ts=?, duration_h=0 WHERE active=1",
-                          (datetime.now().isoformat(),))
         cur = self.conn.cursor()
         cur.execute("INSERT INTO entries (task_id, start_ts, date_key, active) VALUES (?,?,?,1)",
                     (task_id, start_ts, date_key))
@@ -92,6 +90,7 @@ class Storage:
         return cur.lastrowid
 
     def stop_entry(self, entry_id=None):
+        """Остановить конкретную запись"""
         end_ts = datetime.now().isoformat()
         if entry_id:
             cur = self.conn.execute("SELECT start_ts FROM entries WHERE id=?", (entry_id,))
@@ -100,12 +99,7 @@ class Storage:
                 return False
             start_ts = r['start_ts']
         else:
-            cur = self.conn.execute("SELECT id, start_ts FROM entries WHERE active=1")
-            r = cur.fetchone()
-            if not r:
-                return False
-            entry_id = r['id']
-            start_ts = r['start_ts']
+            return False  # Теперь нужно явно указывать entry_id
 
         start = datetime.fromisoformat(start_ts)
         end = datetime.fromisoformat(end_ts)
@@ -115,24 +109,32 @@ class Storage:
         self.conn.commit()
         return True
 
-    def pause_active(self):
-        """Пауза текущей активной задачи"""
-        cur = self.conn.execute("SELECT id FROM entries WHERE active=1")
-        r = cur.fetchone()
-        if not r:
-            return False
-        return self.stop_entry(r['id'])
+    def pause_all(self):
+        """Остановить все активные задачи"""
+        end_ts = datetime.now().isoformat()
+        cur = self.conn.execute("SELECT id, start_ts FROM entries WHERE active=1")
+        active_entries = cur.fetchall()
 
-    def get_active_entry(self):
-        """Получить активную запись (если есть)"""
+        for entry in active_entries:
+            start_ts = entry['start_ts']
+            start = datetime.fromisoformat(start_ts)
+            end = datetime.fromisoformat(end_ts)
+            dur = (end - start).total_seconds() / 3600.0
+            self.conn.execute("UPDATE entries SET end_ts=?, duration_h=?, active=0 WHERE id=?",
+                              (end_ts, round(dur, 2), entry['id']))
+
+        self.conn.commit()
+        return len(active_entries) > 0
+
+    def get_active_entries(self):
+        """Получить все активные записи"""
         cur = self.conn.execute("""
             SELECT e.*, t.name as task_name 
             FROM entries e 
             JOIN tasks t ON e.task_id = t.id 
             WHERE e.active=1
         """)
-        r = cur.fetchone()
-        return dict(r) if r else None
+        return [dict(r) for r in cur.fetchall()]
 
     def list_entries_for_date(self, date_key):
         cur = self.conn.execute(
@@ -257,7 +259,7 @@ class TimeTrackerUI:
         self.root = root
         self.storage = Storage()
         self.selected_date = date.today()
-        self.active_entry = None
+        self.active_entries = []  # Список активных записей
         self.w_vars = {}  # Словарь для хранения переменных чекбоксов
         self._setup_ui()
         self._refresh()
@@ -328,10 +330,10 @@ class TimeTrackerUI:
         self.start_btn = ttk.Button(button_frame, text="START", command=self._start_selected_task)
         self.start_btn.pack(side=tk.LEFT, padx=5)
 
-        self.stop_btn = ttk.Button(button_frame, text="STOP", command=self._stop_active_task, state="disabled")
+        self.stop_btn = ttk.Button(button_frame, text="STOP", command=self._stop_selected_task, state="disabled")
         self.stop_btn.pack(side=tk.LEFT, padx=5)
 
-        self.pause_btn = ttk.Button(button_frame, text="PAUSE", command=self._pause_active_task, state="disabled")
+        self.pause_btn = ttk.Button(button_frame, text="PAUSE ALL", command=self._pause_all_tasks)
         self.pause_btn.pack(side=tk.LEFT, padx=5)
 
         # Status label
@@ -395,13 +397,19 @@ class TimeTrackerUI:
         ttk.Button(main_frame, text="Закрыть", command=report_window.destroy).pack(pady=10)
 
     def _update_timer(self):
-        """Обновление таймера для активной задачи"""
-        if self.active_entry:
-            start_time = datetime.fromisoformat(self.active_entry['start_ts'])
-            current_time = datetime.now()
-            duration = current_time - start_time
-            hours = duration.total_seconds() / 3600
-            self.status_label.config(text=f"Активно: {self.active_entry['task_name']} - {hours:.2f} ч")
+        """Обновление таймера для активных задач"""
+        if self.active_entries:
+            status_text = "Активные задачи: "
+            active_tasks = []
+            for entry in self.active_entries:
+                start_time = datetime.fromisoformat(entry['start_ts'])
+                current_time = datetime.now()
+                duration = current_time - start_time
+                hours = duration.total_seconds() / 3600
+                active_tasks.append(f"{entry['task_name']} ({hours:.2f} ч)")
+
+            status_text += ", ".join(active_tasks)
+            self.status_label.config(text=status_text)
         else:
             self.status_label.config(text="Нет активных задач")
 
@@ -420,17 +428,13 @@ class TimeTrackerUI:
         for i in self.tree.get_children():
             self.tree.delete(i)
 
-        # Проверяем активную задачу
-        self.active_entry = self.storage.get_active_entry()
+        # Проверяем активные задачи
+        self.active_entries = self.storage.get_active_entries()
 
         # Обновляем состояние кнопок
-        if self.active_entry:
-            self.start_btn.config(state="disabled")
-            self.stop_btn.config(state="normal")
+        if self.active_entries:
             self.pause_btn.config(state="normal")
         else:
-            self.start_btn.config(state="normal")
-            self.stop_btn.config(state="disabled")
             self.pause_btn.config(state="disabled")
 
         date_key = self._get_date_key()
@@ -445,8 +449,8 @@ class TimeTrackerUI:
                 for entry in entries:
                     start_t = datetime.fromisoformat(entry['start_ts']).strftime('%H:%M')
                     end_t = datetime.fromisoformat(entry['end_ts']).strftime('%H:%M') if entry['end_ts'] else ''
-                    # Добавляем стрелку для активной задачи
-                    is_active = entry['active'] or (self.active_entry and self.active_entry['id'] == entry['id'])
+                    # Добавляем стрелку для активных задач
+                    is_active = any(active_entry['id'] == entry['id'] for active_entry in self.active_entries)
                     task_name = ('▶ ' if is_active else '') + task['name']
 
                     item_id = self.tree.insert("", tk.END, values=(
@@ -600,28 +604,48 @@ class TimeTrackerUI:
             return
 
         item = self.tree.item(selection[0])
-        task_name = item['values'][0].replace('▶ ', '').strip()
+        values = item['values']
+
+        # Проверяем, есть ли уже активная запись для этой задачи
+        task_name = values[0].replace('▶ ', '').strip()
 
         # Находим task_id по имени задачи
         task_id = self.storage.get_task_id_by_name(task_name)
 
         if task_id:
             self.storage.start_entry(task_id, self._get_date_key())
-            self.active_entry = self.storage.get_active_entry()
+            self.active_entries = self.storage.get_active_entries()
             self._refresh()
 
-    def _stop_active_task(self):
-        """Остановить активную задачу"""
-        if self.active_entry:
-            self.storage.stop_entry(self.active_entry['id'])
-            self.active_entry = None
-            self._refresh()
+    def _stop_selected_task(self):
+        """Остановить выбранную активную задачу"""
+        selection = self.tree.selection()
+        if not selection:
+            messagebox.showwarning("Предупреждение", "Выберите задачу для остановки")
+            return
 
-    def _pause_active_task(self):
-        """Приостановить активную задачу"""
-        if self.active_entry:
-            self.storage.pause_active()
-            self.active_entry = None
+        item = self.tree.item(selection[0])
+        values = item['values']
+
+        # Получаем ID записи из последнего столбца
+        entry_id_str = values[5]
+        try:
+            entry_id = int(entry_id_str.split(': ')[1])
+            # Проверяем, активна ли эта запись
+            if any(entry['id'] == entry_id for entry in self.active_entries):
+                self.storage.stop_entry(entry_id)
+                self.active_entries = self.storage.get_active_entries()
+                self._refresh()
+            else:
+                messagebox.showwarning("Предупреждение", "Выбранная задача не активна")
+        except (IndexError, ValueError):
+            messagebox.showerror("Ошибка", "Не удалось определить ID записи")
+
+    def _pause_all_tasks(self):
+        """Остановить все активные задачи"""
+        if self.active_entries:
+            self.storage.pause_all()
+            self.active_entries = []
             self._refresh()
 
     def _add_task_dialog(self):
@@ -680,6 +704,19 @@ def main():
     root = tk.Tk()
     root.title("Time Tracker")
     root.geometry("800x600")
+
+    # Добавьте эти строки для установки иконки
+    try:
+        # Для Windows - используйте .ico файл
+        root.iconbitmap("app.ico")
+    except:
+        try:
+            # Для других ОС или если .ico не работает
+            icon = tk.PhotoImage(file="app.png")
+            root.iconphoto(True, icon)
+        except:
+            print("Не удалось загрузить иконку. Убедитесь, что файл app.ico или app.png находится в той же папке")
+
     app = TimeTrackerUI(root)
     root.mainloop()
 

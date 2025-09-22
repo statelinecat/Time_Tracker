@@ -35,8 +35,8 @@ try:
 except Exception:
     pd = None
 
-DB_FILE = "time_tracker.db"
-BACKUP_DIR = "backups"
+DB_FILE = "time_tracker_old.db"
+BACKUP_DIR = ""
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (
